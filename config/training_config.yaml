@@ -1,0 +1,18 @@
+model:
+  in_channels: 3
+  num_blocks: 16
+
+data:
+  # Can be a video file, image file, or directory of images
+  train_data: "data/raw/train"  # Path to training data
+  val_data: "data/raw/val"      # Path to validation data
+  frame_size: [256, 256]
+  is_video: null  # Set to true for video, false for images, null for auto-detect
+
+training:
+  batch_size: 8
+  num_workers: 4
+  epochs: 100
+  learning_rate: 0.0001
+  log_dir: "logs"
+  checkpoint_dir: "checkpoints"
