@@ -8,85 +8,85 @@ from typing import Union, List, Tuple
 
 class MediaDataset(Dataset):
     def __init__(self, 
-                 input_path: Union[str, List[str]], 
+                 distorted_path: str,
+                 clean_path: str,
                  frame_size: Tuple[int, int] = (256, 256), 
-                 transform=None,
-                 is_video: bool = None):
+                 transform=None):
         """
-        Dataset for processing both video and image data
+        Dataset for processing paired distorted and clean images
         Args:
-            input_path: Path to video file or directory of images/list of image paths
+            distorted_path: Path to directory containing distorted images
+            clean_path: Path to directory containing clean (ground truth) images
             frame_size: Tuple of (height, width) for frame/image resizing
             transform: Optional transforms to apply to frames/images
-            is_video: If None, automatically detect based on file extension
         """
-        self.input_path = input_path
+        self.distorted_path = distorted_path
+        self.clean_path = clean_path
         self.frame_size = frame_size
         self.transform = transform
-        self.frames = []
-        self._load_media(is_video)
+        self.pairs = []
+        self._load_and_pair_images()
 
-    def _is_video_file(self, file_path: str) -> bool:
-        """Check if the file is a video based on extension"""
-        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm'}
-        return Path(file_path).suffix.lower() in video_extensions
+    def _load_and_pair_images(self):
+        """Load and pair distorted and clean images"""
+        # Get all image files from both directories
+        distorted_files = sorted([
+            f for f in os.listdir(self.distorted_path) 
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))
+        ])
+        clean_files = sorted([
+            f for f in os.listdir(self.clean_path) 
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))
+        ])
 
-    def _load_media(self, is_video: bool = None):
-        """Load media (video or images) and extract frames"""
-        if isinstance(self.input_path, str):
-            input_path = self.input_path
-        else:
-            input_path = self.input_path[0]  # Use first path for type detection
-
-        # Auto-detect media type if not specified
-        if is_video is None:
-            is_video = self._is_video_file(input_path)
-
-        if is_video:
-            self._load_video(input_path)
-        else:
-            self._load_images(self.input_path)
-
-    def _load_video(self, video_path: str):
-        """Load video and extract frames"""
-        cap = cv2.VideoCapture(video_path)
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = cv2.resize(frame, self.frame_size)
-            self.frames.append(frame)
-        cap.release()
-
-    def _load_images(self, image_paths: Union[str, List[str]]):
-        """Load images from path or list of paths"""
-        if isinstance(image_paths, str):
-            # If path is a directory, load all images
-            if os.path.isdir(image_paths):
-                image_paths = [
-                    os.path.join(image_paths, f) 
-                    for f in os.listdir(image_paths) 
-                    if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))
-                ]
+        # Create pairs of (distorted_path, clean_path)
+        for distorted_file in distorted_files:
+            # Extract base name without extension
+            base_name = os.path.splitext(distorted_file)[0]
+            # Create clean filename by appending "_clean" before extension
+            clean_filename = f"{base_name}_clean{os.path.splitext(distorted_file)[1]}"
+            
+            # Check if clean file exists
+            if clean_filename in clean_files:
+                self.pairs.append((
+                    os.path.join(self.distorted_path, distorted_file),
+                    os.path.join(self.clean_path, clean_filename)
+                ))
             else:
-                image_paths = [image_paths]
+                print(f"Warning: No matching clean image found for {distorted_file}")
 
-        for img_path in image_paths:
-            frame = cv2.imread(img_path)
-            if frame is not None:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame = cv2.resize(frame, self.frame_size)
-                self.frames.append(frame)
+        if not self.pairs:
+            raise ValueError("No valid image pairs found in the specified directories")
 
     def __len__(self):
-        return len(self.frames)
+        return len(self.pairs)
 
     def __getitem__(self, idx):
-        frame = self.frames[idx]
+        distorted_path, clean_path = self.pairs[idx]
+        
+        # Load and preprocess distorted image
+        distorted = cv2.imread(distorted_path)
+        if distorted is None:
+            raise ValueError(f"Failed to load distorted image: {distorted_path}")
+        distorted = cv2.cvtColor(distorted, cv2.COLOR_BGR2RGB)
+        distorted = cv2.resize(distorted, self.frame_size)
+        
+        # Load and preprocess clean image
+        clean = cv2.imread(clean_path)
+        if clean is None:
+            raise ValueError(f"Failed to load clean image: {clean_path}")
+        clean = cv2.cvtColor(clean, cv2.COLOR_BGR2RGB)
+        clean = cv2.resize(clean, self.frame_size)
+        
         if self.transform:
-            frame = self.transform(frame)
-        return torch.from_numpy(frame).permute(2, 0, 1).float() / 255.0
+            distorted = self.transform(distorted)
+            clean = self.transform(clean)
+            
+        # Convert to tensors and normalize
+        distorted = torch.from_numpy(distorted).permute(2, 0, 1).float() / 255.0
+        clean = torch.from_numpy(clean).permute(2, 0, 1).float() / 255.0
+        
+        return distorted, clean
 
 class MediaProcessor:
     def __init__(self, input_path: Union[str, List[str]], 

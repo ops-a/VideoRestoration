@@ -3,16 +3,20 @@ model:
   num_blocks: 16
 
 data:
-  # Can be a video file, image file, or directory of images
-  train_data: "data/raw/train"  # Path to training data
-  val_data: "data/raw/val"      # Path to validation data
-  frame_size: [256, 256]
+  # Training data paths
+  train_distorted: "data/raw/train/distorted"  # Path to distorted training images
+  train_clean: "data/raw/train/clean"          # Path to clean training images
+  val_distorted: "data/raw/val/distorted"      # Path to distorted validation images
+  val_clean: "data/raw/val/clean"              # Path to clean validation images
+  test_distorted: "data/raw/test/distorted"    # Path to distorted test images
+  test_clean: "data/raw/test/clean"            # Path to clean test images
+  frame_size: [256, 256]                       # Size to resize images to
   is_video: null  # Set to true for video, false for images, null for auto-detect
 
 training:
-  batch_size: 8
-  num_workers: 4
-  epochs: 100
-  learning_rate: 0.0001
-  log_dir: "logs"
-  checkpoint_dir: "checkpoints"
+  batch_size: 4                                # Start with a smaller batch size
+  num_workers: 4                               # Number of data loading workers
+  epochs: 100                                  # Number of training epochs
+  learning_rate: 0.0001                        # Learning rate
+  log_dir: "logs"                              # Directory for log files
+  checkpoint_dir: "checkpoints"                # Directory for model checkpoints

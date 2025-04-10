@@ -10,10 +10,23 @@ from pathlib import Path
 from tqdm import tqdm
 import os
 import numpy as np
+import logging
 
 from models.restoration_model import VideoRestorationModel
 from data.video_processor import MediaDataset
 from utils.metrics import ImageQualityMetrics
+
+def setup_logging(log_dir: Path):
+    """Set up logging configuration"""
+    log_file = log_dir / 'training.log'
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
 
 class EarlyStopping:
     def __init__(self, patience=7, min_delta=0):
@@ -148,121 +161,180 @@ def save_checkpoint(model, optimizer, epoch, train_loss, val_loss, train_metrics
     }, path)
 
 def main():
-    args = parse_args()
-    config = load_config(args.config)
-    
-    # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-    
-    # Create model
+    # Load configuration
+    config_path = Path(__file__).parent.parent / "config" / "training_config.yaml"
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Set up logging
+    log_dir = Path(config['training']['log_dir'])
+    log_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(log_dir)
+
+    # Set random seed for reproducibility
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(42)
+        # Enable memory efficient algorithms
+        torch.backends.cudnn.benchmark = True
+        # Clear any existing CUDA cache
+        torch.cuda.empty_cache()
+
+    # Initialize model
     model = VideoRestorationModel(
         in_channels=config['model']['in_channels'],
         num_blocks=config['model']['num_blocks']
-    ).to(device)
-    
-    # Create datasets and dataloaders
+    )
+
+    # Move model to GPU if available
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+
+    # Initialize optimizer and loss function
+    optimizer = optim.Adam(model.parameters(), lr=config['training']['learning_rate'])
+    criterion = nn.MSELoss()
+
+    # Create data loaders with reduced batch size if needed
+    batch_size = config['training']['batch_size']
+    if torch.cuda.is_available():
+        # Try to determine optimal batch size
+        try:
+            # Test with a small batch first
+            test_batch = torch.randn(1, 3, *config['data']['frame_size']).to(device)
+            model(test_batch)
+            # If successful, try with full batch size
+            test_batch = torch.randn(batch_size, 3, *config['data']['frame_size']).to(device)
+            model(test_batch)
+        except RuntimeError as e:
+            if "out of memory" in str(e):
+                logging.warning("Reducing batch size due to memory constraints")
+                batch_size = max(1, batch_size // 2)
+                torch.cuda.empty_cache()
+
     train_dataset = MediaDataset(
-        config['data']['train_data'],
-        frame_size=tuple(config['data']['frame_size']),
-        is_video=config['data'].get('is_video', None)
+        distorted_path=config['data']['train_distorted'],
+        clean_path=config['data']['train_clean'],
+        frame_size=config['data']['frame_size']
     )
     val_dataset = MediaDataset(
-        config['data']['val_data'],
-        frame_size=tuple(config['data']['frame_size']),
-        is_video=config['data'].get('is_video', None)
+        distorted_path=config['data']['val_distorted'],
+        clean_path=config['data']['val_clean'],
+        frame_size=config['data']['frame_size']
     )
-    
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config['training']['batch_size'],
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=config['training']['num_workers']
+        num_workers=config['training']['num_workers'],
+        pin_memory=True  # Enable pinned memory for faster data transfer
     )
-    
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config['training']['batch_size'],
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=config['training']['num_workers']
+        num_workers=config['training']['num_workers'],
+        pin_memory=True
     )
-    
-    # Setup training
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=config['training']['learning_rate'],
-        weight_decay=1e-4  # L2 regularization
-    )
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=0.5,
-        patience=5,
-        verbose=True
-    )
-    
-    # Setup mixed precision training
-    scaler = GradScaler()
-    
-    # Setup early stopping
-    early_stopping = EarlyStopping(patience=10)
-    
-    # Setup logging
-    writer = SummaryWriter(config['training']['log_dir'])
-    
+
     # Training loop
     best_val_loss = float('inf')
     for epoch in range(config['training']['epochs']):
         try:
             # Training phase
-            train_loss, train_metrics = train(model, train_loader, criterion, optimizer, device, epoch, writer, scaler)
-            
+            model.train()
+            train_loss = 0.0
+            for batch_idx, (data, target) in enumerate(train_loader):
+                try:
+                    data, target = data.to(device), target.to(device)
+                    
+                    optimizer.zero_grad()
+                    output = model(data)
+                    loss = criterion(output, target)
+                    loss.backward()
+                    optimizer.step()
+                    
+                    train_loss += loss.item()
+                    
+                    if batch_idx % 10 == 0:
+                        logging.info(f'Train Epoch: {epoch} [{batch_idx}/{len(train_loader)}]\tLoss: {loss.item():.6f}')
+                    
+                    # Clear memory after each batch
+                    del output, loss
+                    torch.cuda.empty_cache()
+                    
+                except RuntimeError as e:
+                    if "out of memory" in str(e):
+                        logging.warning("Out of memory during training batch. Skipping batch.")
+                        torch.cuda.empty_cache()
+                        continue
+                    else:
+                        raise e
+
             # Validation phase
-            val_loss, val_metrics = validate(model, val_loader, criterion, device)
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for data, target in val_loader:
+                    try:
+                        data, target = data.to(device), target.to(device)
+                        output = model(data)
+                        val_loss += criterion(output, target).item()
+                        
+                        # Clear memory after each batch
+                        del output
+                        torch.cuda.empty_cache()
+                        
+                    except RuntimeError as e:
+                        if "out of memory" in str(e):
+                            logging.warning("Out of memory during validation batch. Skipping batch.")
+                            torch.cuda.empty_cache()
+                            continue
+                        else:
+                            raise e
+
+            # Calculate average losses
+            train_loss /= len(train_loader)
+            val_loss /= len(val_loader)
             
-            # Log metrics
-            writer.add_scalar('Validation/Loss', val_loss, epoch)
-            for metric, value in val_metrics.items():
-                writer.add_scalar(f'Validation/{metric.upper()}', value, epoch)
-            
-            # Learning rate scheduling
-            scheduler.step(val_loss)
-            
+            logging.info(f'Epoch {epoch}: Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}')
+
             # Save best model
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                save_checkpoint(
-                    model, optimizer, epoch, train_loss, val_loss,
-                    train_metrics, val_metrics,
-                    Path(config['training']['checkpoint_dir']) / 'best_model.pth'
-                )
-            
-            # Print epoch summary
-            print(f'\nEpoch {epoch}:')
-            print(f'Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
-            print('Train Metrics:')
-            for metric, value in train_metrics.items():
-                print(f'  {metric.upper()}: {value:.4f}')
-            print('Val Metrics:')
-            for metric, value in val_metrics.items():
-                print(f'  {metric.upper()}: {value:.4f}')
-            
-            # Early stopping check
-            if early_stopping(val_loss):
-                print("Early stopping triggered")
-                break
+                checkpoint_dir = Path(config['training']['checkpoint_dir'])
+                checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                }, checkpoint_dir / 'best_model.pth')
                 
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print("WARNING: out of memory")
-                if hasattr(torch.cuda, 'empty_cache'):
-                    torch.cuda.empty_cache()
+                logging.error("Out of memory during epoch. Reducing batch size and retrying.")
+                batch_size = max(1, batch_size // 2)
+                torch.cuda.empty_cache()
+                # Recreate data loaders with new batch size
+                train_loader = DataLoader(
+                    train_dataset,
+                    batch_size=batch_size,
+                    shuffle=True,
+                    num_workers=config['training']['num_workers'],
+                    pin_memory=True
+                )
+                val_loader = DataLoader(
+                    val_dataset,
+                    batch_size=batch_size,
+                    shuffle=False,
+                    num_workers=config['training']['num_workers'],
+                    pin_memory=True
+                )
                 continue
             else:
                 raise e
-    
-    writer.close()
 
 if __name__ == '__main__':
     main()
