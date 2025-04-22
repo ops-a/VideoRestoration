@@ -19,7 +19,9 @@ from skimage.metrics import structural_similarity as ssim
 app = Flask(__name__, 
             static_url_path='/static',
             static_folder='static')
-app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
+
+# Use absolute paths for upload folder
+app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Create upload folder if it doesn't exist
