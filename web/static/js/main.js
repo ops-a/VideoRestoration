@@ -31,8 +31,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (response.ok) {
                 // Display results
-                originalImage.src = `/static/uploads/${data.original}`;
-                restoredImage.src = `/static/uploads/${data.restored}`;
+                originalImage.src = data.input_image;
+                restoredImage.src = data.output_image;
                 
                 // Display metrics
                 metricsDiv.innerHTML = '';
