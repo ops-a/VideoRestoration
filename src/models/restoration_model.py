@@ -119,7 +119,7 @@ class RainRemovalModel(nn.Module):
         image = Image.open(image_path).convert('RGB')
         transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Standard ImageNet normalization
         ])
         image_tensor = transform(image).unsqueeze(0)
         
@@ -129,7 +129,11 @@ class RainRemovalModel(nn.Module):
         
         # Convert output to image
         output = output.squeeze(0).cpu()
-        output = (output * 0.5 + 0.5).clamp(0, 1)
+        # Denormalize using ImageNet stats
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        output = output * std + mean
+        output = output.clamp(0, 1)
         output = transforms.ToPILImage()(output)
         
         # Save result
@@ -226,7 +230,7 @@ class EncoderDecoderModel(nn.Module):
         image = Image.open(image_path).convert('RGB')
         transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Standard ImageNet normalization
         ])
         image_tensor = transform(image).unsqueeze(0)
         
@@ -236,7 +240,11 @@ class EncoderDecoderModel(nn.Module):
         
         # Convert output to image
         output = output.squeeze(0).cpu()
-        output = (output * 0.5 + 0.5).clamp(0, 1)
+        # Denormalize using ImageNet stats
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        output = output * std + mean
+        output = output.clamp(0, 1)
         output = transforms.ToPILImage()(output)
         
         # Save result
