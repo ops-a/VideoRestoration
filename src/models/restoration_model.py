@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from PIL import Image
+from torchvision import transforms
 
 class AttentionBlock(nn.Module):
     def __init__(self, in_channels):
@@ -111,6 +113,28 @@ class RainRemovalModel(nn.Module):
         
         return dec1
 
+    def process_image(self, image_path: str, output_path: str) -> None:
+        """Process a single image and save the result"""
+        # Load and preprocess image
+        image = Image.open(image_path).convert('RGB')
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ])
+        image_tensor = transform(image).unsqueeze(0)
+        
+        # Process image
+        with torch.no_grad():
+            output = self(image_tensor)
+        
+        # Convert output to image
+        output = output.squeeze(0).cpu()
+        output = (output * 0.5 + 0.5).clamp(0, 1)
+        output = transforms.ToPILImage()(output)
+        
+        # Save result
+        output.save(output_path)
+
 class EncoderDecoderModel(nn.Module):
     def __init__(self, in_channels=3):
         super(EncoderDecoderModel, self).__init__()
@@ -195,6 +219,28 @@ class EncoderDecoderModel(nn.Module):
         if x.size(2) != target_size[0] or x.size(3) != target_size[1]:
             return F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
         return x
+
+    def process_image(self, image_path: str, output_path: str) -> None:
+        """Process a single image and save the result"""
+        # Load and preprocess image
+        image = Image.open(image_path).convert('RGB')
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ])
+        image_tensor = transform(image).unsqueeze(0)
+        
+        # Process image
+        with torch.no_grad():
+            output = self(image_tensor)
+        
+        # Convert output to image
+        output = output.squeeze(0).cpu()
+        output = (output * 0.5 + 0.5).clamp(0, 1)
+        output = transforms.ToPILImage()(output)
+        
+        # Save result
+        output.save(output_path)
 
 # For backward compatibility
 VideoRestorationModel = EncoderDecoderModel
