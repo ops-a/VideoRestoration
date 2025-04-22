@@ -94,9 +94,16 @@ def evaluate_model(model: VideoRestorationModel,
             for metric in total_metrics:
                 total_metrics[metric] += batch_metrics[metric]
 
-            # Save restored image
+            # Process and save restored image
             restored_img = output[0].cpu().numpy().transpose(1, 2, 0)
+            
+            # Ensure values are in [0,1] range
+            restored_img = np.clip(restored_img, 0, 1)
+            
+            # Convert to uint8
             restored_img = (restored_img * 255).astype(np.uint8)
+            
+            # Convert to BGR for OpenCV
             restored_img = cv2.cvtColor(restored_img, cv2.COLOR_RGB2BGR)
             
             # Get original filename from the dataset

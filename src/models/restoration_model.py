@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
+import numpy as np
 
 class AttentionBlock(nn.Module):
     def __init__(self, in_channels):
@@ -113,31 +114,30 @@ class RainRemovalModel(nn.Module):
         
         return dec1
 
-    def process_image(self, image_path: str, output_path: str) -> None:
+    def process_image(self, input_path: str, output_path: str):
         """Process a single image and save the result"""
+        device = next(self.parameters()).device
+        
         # Load and preprocess image
-        image = Image.open(image_path).convert('RGB')
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Standard ImageNet normalization
-        ])
-        image_tensor = transform(image).unsqueeze(0)
+        img = Image.open(input_path).convert('RGB')
+        img_tensor = torch.from_numpy(np.array(img)).float() / 255.0
+        img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0).to(device)
         
         # Process image
         with torch.no_grad():
-            output = self(image_tensor)
+            output = self(img_tensor)
         
-        # Convert output to image
-        output = output.squeeze(0).cpu()
-        # Denormalize using ImageNet stats
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-        output = output * std + mean
-        output = output.clamp(0, 1)
-        output = transforms.ToPILImage()(output)
+        # Convert output to numpy array
+        output = output[0].cpu().numpy().transpose(1, 2, 0)
+        
+        # Ensure values are in [0,1] range
+        output = np.clip(output, 0, 1)
+        
+        # Convert to uint8
+        output = (output * 255).astype(np.uint8)
         
         # Save result
-        output.save(output_path)
+        Image.fromarray(output).save(output_path)
 
 class EncoderDecoderModel(nn.Module):
     def __init__(self, in_channels=3):
