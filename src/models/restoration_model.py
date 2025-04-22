@@ -36,29 +36,136 @@ class ResidualBlock(nn.Module):
         out = self.relu(out)
         return out
 
-class VideoRestorationModel(nn.Module):
-    def __init__(self, in_channels=3, num_blocks=16):
-        super(VideoRestorationModel, self).__init__()
-        
-        # Initial feature extraction
-        self.conv1 = nn.Conv2d(in_channels, 64, 3, padding=1)
+# Squeeze-and-Excitation Block for RainRemoval architecture
+class SEBlock(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super(SEBlock, self).__init__()
+        self.fc1 = nn.Linear(channels, channels // reduction)
+        self.fc2 = nn.Linear(channels // reduction, channels)
         self.relu = nn.ReLU(inplace=True)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        batch, channels, _, _ = x.size()
+        y = x.view(batch, channels, -1).mean(dim=2)  # Global Average Pooling
+        y = self.fc1(y)
+        y = self.relu(y)
+        y = self.fc2(y)
+        y = self.sigmoid(y).view(batch, channels, 1, 1)
+        return x * y
+
+class RainRemovalModel(nn.Module):
+    def __init__(self, in_channels=3):
+        super(RainRemovalModel, self).__init__()
         
-        # Residual blocks with attention
-        self.res_blocks = nn.ModuleList([
-            nn.Sequential(
-                ResidualBlock(64),
-                AttentionBlock(64)
-            ) for _ in range(num_blocks)
-        ])
+        # Encoder
+        self.encoder1 = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.encoder2 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.encoder3 = nn.Sequential(
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True)
+        )
         
-        # Upsampling and final reconstruction
-        self.conv2 = nn.Conv2d(64, 64, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, in_channels, 3, padding=1)
+        # Bottleneck with SEBlock
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            SEBlock(512),
+            nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True)
+        )
         
-        # Initialize weights
-        self._initialize_weights()
+        # Decoder
+        self.decoder3 = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.decoder2 = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.decoder1 = nn.Sequential(
+            nn.Conv2d(64, in_channels, kernel_size=3, stride=1, padding=1),
+            nn.Sigmoid()  # Output normalized to [0, 1]
+        )
+    
+    def forward(self, x):
+        # Encoder
+        enc1 = self.encoder1(x)
+        enc2 = self.encoder2(enc1)
+        enc3 = self.encoder3(enc2)
+        
+        # Bottleneck
+        bottleneck = self.bottleneck(enc3)
+        
+        # Decoder with skip connections
+        dec3 = self.decoder3(bottleneck + enc3)  # Skip connection
+        dec2 = self.decoder2(dec3 + enc2)        # Skip connection
+        dec1 = self.decoder1(dec2 + enc1)        # Skip connection
+        
+        return dec1
+
+class EncoderDecoderModel(nn.Module):
+    def __init__(self, in_channels=3):
+        super(EncoderDecoderModel, self).__init__()
+        
+        # Encoder
+        self.encoder1 = nn.Sequential(
+            nn.Conv2d(in_channels, 64, 3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.encoder2 = nn.Sequential(
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.encoder3 = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Bottleneck
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(256, 512, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(512, 512),  # fc1
+            nn.ReLU(inplace=True),
+            nn.Linear(512, 512),  # fc2
+            nn.ReLU(inplace=True),
+            nn.Unflatten(1, (512, 1, 1)),
+            nn.Conv2d(512, 256, 1),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Additional bottleneck layers
+        self.bottleneck_extra = nn.Sequential(
+            nn.Conv2d(256, 256, 3, padding=1),  # bottleneck.4
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, 3, padding=1),  # bottleneck.6
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, 3, padding=1),  # bottleneck.9
+            nn.ReLU(inplace=True)
+        )
+        
+        # Decoder
+        self.decoder3 = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, 4, stride=2, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.decoder2 = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1),
+            nn.ReLU(inplace=True)
+        )
+        self.decoder1 = nn.Sequential(
+            nn.Conv2d(64, in_channels, 3, padding=1)
+        )
         
     def forward(self, x):
         # Input validation
@@ -67,35 +174,27 @@ class VideoRestorationModel(nn.Module):
         if x.size(1) != 3:
             raise ValueError(f"Expected 3 channels, got {x.size(1)}")
             
-        # Initial feature extraction
-        out = self.conv1(x)
-        out = self.relu(out)
+        # Encoder
+        e1 = self.encoder1(x)
+        e2 = self.encoder2(e1)
+        e3 = self.encoder3(e2)
         
-        # Residual blocks with attention
-        for res_block in self.res_blocks:
-            out = res_block(out)
+        # Bottleneck
+        b = self.bottleneck(e3)
+        b = self.bottleneck_extra(b)
         
-        # Final reconstruction
-        out = self.conv2(out)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.conv3(out)
+        # Decoder
+        d3 = self.decoder3(b)
+        d2 = self.decoder2(d3)
+        d1 = self.decoder1(d2)
         
-        return out
+        return d1
 
-    def _initialize_weights(self):
-        """Initialize model weights"""
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-                
     def resize_input(self, x, target_size=(256, 256)):
         """Resize input to target size while maintaining aspect ratio"""
         if x.size(2) != target_size[0] or x.size(3) != target_size[1]:
             return F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
         return x
+
+# For backward compatibility
+VideoRestorationModel = EncoderDecoderModel

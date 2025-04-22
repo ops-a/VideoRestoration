@@ -1,0 +1,39 @@
+/* Custom styles */
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Image container styles */
+#original-image,
+#restored-image {
+    max-height: 400px;
+    object-fit: contain;
+}
+
+/* Upload area hover effects */
+label[for="image-upload"] {
+    transition: all 0.3s ease;
+}
+
+label[for="image-upload"]:hover {
+    border-color: #3b82f6;
+    background-color: #f3f4f6;
+}
+
+/* Metric cards */
+#metrics > div {
+    transition: transform 0.2s ease;
+}
+
+#metrics > div:hover {
+    transform: translateY(-2px);
+} 

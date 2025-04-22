@@ -9,4 +9,6 @@ tqdm>=4.62.3
 PyYAML>=5.4.1
 tensorboard>=2.7.0
 pytest>=6.2.0
-jupyter>=1.0.0 
+jupyter>=1.0.0
+flask>=2.0.1
+werkzeug>=2.0.1 

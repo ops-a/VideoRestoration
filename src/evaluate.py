@@ -12,7 +12,7 @@ import logging
 import cv2
 from typing import Dict, List, Tuple
 
-from models.restoration_model import VideoRestorationModel
+from models.restoration_model import VideoRestorationModel, EncoderDecoderModel, RainRemovalModel
 from data.video_processor import MediaDataset
 from utils.metrics import ImageQualityMetrics
 
@@ -33,16 +33,35 @@ def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def load_model(checkpoint_path: str, config: dict, device: torch.device) -> VideoRestorationModel:
-    """Load model from checkpoint"""
-    model = VideoRestorationModel(
-        in_channels=config['model']['in_channels'],
-        num_blocks=config['model']['num_blocks']
-    ).to(device)
-    
+def load_model(checkpoint_path: str, config: dict, device: torch.device) -> nn.Module:
+    """Load model from checkpoint, handling different architectures"""
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    logging.info(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
+    
+    # Determine model architecture based on checkpoint keys
+    if 'bottleneck.2.fc1.weight' in checkpoint:  # SEBlock layer
+        model = RainRemovalModel(
+            in_channels=config['model'].get('in_channels', 3)
+        ).to(device)
+    elif 'bottleneck.4.weight' in checkpoint:  # EncoderDecoderModel with extra layers
+        model = EncoderDecoderModel(
+            in_channels=config['model'].get('in_channels', 3)
+        ).to(device)
+    else:
+        # Residual Block architecture
+        model = VideoRestorationModel(
+            in_channels=config['model'].get('in_channels', 3),
+            num_blocks=config['model'].get('num_blocks', 16)
+        ).to(device)
+    
+    # Load state dict
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'])
+        logging.info(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}")
+    else:
+        # Direct state dict format
+        model.load_state_dict(checkpoint)
+        logging.info("Loaded checkpoint (direct state dict format)")
+    
     return model
 
 def evaluate_model(model: VideoRestorationModel, 

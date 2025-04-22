@@ -1,0 +1,11 @@
+model:
+  in_channels: 3
+  num_blocks: 16  # Only used for Residual Block architecture
+
+data:
+  test_distorted: "data/raw/test/distorted"  # Path to test distorted images
+  test_clean: "data/raw/test/clean"         # Path to test clean images
+  frame_size: [256, 256]                # Size to resize images to
+
+training:
+  num_workers: 4                        # Number of workers for data loading 
